@@ -17,6 +17,14 @@
       "targetField": "name",
       "required": true
     },
+    "logo": {
+      "type": "media",
+      "multiple": false,
+      "allowedTypes": ["images"]
+    },
+    "bio": {
+      "type": "richtext"
+    },
     "games": {
       "type": "relation",
       "relation": "oneToMany",

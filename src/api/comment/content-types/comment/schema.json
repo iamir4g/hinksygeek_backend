@@ -8,9 +8,13 @@
   },
   "options": {},
   "attributes": {
-    "text": {
+    "content": {
       "type": "text",
       "required": true
+    },
+    "isApproved": {
+      "type": "boolean",
+      "default": false
     },
     "game": {
       "type": "relation",
@@ -18,7 +22,7 @@
       "target": "api::game.game",
       "inversedBy": "comments"
     },
-    "user": {
+    "author": {
       "type": "relation",
       "relation": "manyToOne",
       "target": "plugin::users-permissions.user"
