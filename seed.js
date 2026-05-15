@@ -1,7 +1,7 @@
 const DEFAULT_STRAPI_URL = "http://localhost:1337";
 
 function requireEnv(name) {
-  const v = process.env[name];
+  const v = process.env[name]?.trim();
   if (!v) throw new Error(`Missing required env var: ${name}`);
   return v;
 }
@@ -139,6 +139,550 @@ async function ensureBySlug(collection, { slug, ...data }) {
   return id;
 }
 
+function slugifyAscii(input) {
+  const s = String(input || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-|-$/g, "");
+  return s || null;
+}
+
+function normalizeDigits(input) {
+  const s = String(input || "");
+  const map = {
+    "۰": "0",
+    "۱": "1",
+    "۲": "2",
+    "۳": "3",
+    "۴": "4",
+    "۵": "5",
+    "۶": "6",
+    "۷": "7",
+    "۸": "8",
+    "۹": "9",
+    "٠": "0",
+    "١": "1",
+    "٢": "2",
+    "٣": "3",
+    "٤": "4",
+    "٥": "5",
+    "٦": "6",
+    "٧": "7",
+    "٨": "8",
+    "٩": "9",
+  };
+  return s.replace(/[۰-۹٠-٩]/g, (ch) => map[ch] ?? ch);
+}
+
+function decodeEntities(input) {
+  return String(input || "")
+    .replace(/&nbsp;/g, " ")
+    .replace(/&amp;/g, "&")
+    .replace(/&quot;/g, '"')
+    .replace(/&#039;/g, "'")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">");
+}
+
+function decodeXmlEntities(input) {
+  return decodeEntities(input)
+    .replace(/&#x([0-9a-fA-F]+);/g, (_, hex) =>
+      String.fromCodePoint(parseInt(hex, 16)),
+    )
+    .replace(/&#([0-9]+);/g, (_, num) =>
+      String.fromCodePoint(parseInt(num, 10)),
+    );
+}
+
+function htmlToText(html) {
+  const cleaned = String(html || "")
+    .replace(/<script[\s\S]*?<\/script>/gi, " ")
+    .replace(/<style[\s\S]*?<\/style>/gi, " ");
+  const text = cleaned
+    .replace(/<br\s*\/?>/gi, "\n")
+    .replace(/<\/(p|div|li|h1|h2|h3|tr|td|th)>/gi, "\n")
+    .replace(/<[^>]*>/g, " ");
+  return decodeEntities(text)
+    .replace(/[ \t]+\n/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .replace(/[ \t]{2,}/g, " ")
+    .trim();
+}
+
+function extractMeta(html, key) {
+  const h = String(html || "");
+  const re1 = new RegExp(
+    `<meta[^>]+property=["']${key}["'][^>]+content=["']([^"']+)["'][^>]*>`,
+    "i",
+  );
+  const re2 = new RegExp(
+    `<meta[^>]+name=["']${key}["'][^>]+content=["']([^"']+)["'][^>]*>`,
+    "i",
+  );
+  const m = h.match(re1) || h.match(re2);
+  return m ? decodeEntities(m[1]).trim() : null;
+}
+
+function extractFirstTagText(html, tagName) {
+  const re = new RegExp(`<${tagName}[^>]*>([\\s\\S]*?)<\\/${tagName}>`, "i");
+  const m = String(html || "").match(re);
+  if (!m) return null;
+  return htmlToText(m[1]).trim() || null;
+}
+
+function extractImageUrls(html, baseUrl) {
+  const out = [];
+  const seen = new Set();
+  const h = String(html || "");
+  const re = /<img[^>]+src=["']([^"']+)["'][^>]*>/gi;
+  let m;
+  while ((m = re.exec(h))) {
+    const raw = m[1];
+    if (!raw || raw.startsWith("data:")) continue;
+    const url = new URL(raw, baseUrl).toString();
+    if (!/\.(png|jpe?g|webp)(\?|#|$)/i.test(url)) continue;
+    if (/logo|icon|sprite/i.test(url)) continue;
+    if (seen.has(url)) continue;
+    seen.add(url);
+    out.push(url);
+  }
+  return out;
+}
+
+function parseBaziPlanetSpecs(text) {
+  const normalized = normalizeDigits(text);
+  const lines = normalized
+    .split("\n")
+    .map((l) => l.trim())
+    .filter(Boolean);
+
+  const idx = lines.findIndex((l) => l.includes("مشخصات"));
+  if (idx === -1) return {};
+  const tail = lines.slice(idx + 1);
+
+  function findValue(label) {
+    const i = tail.findIndex((l) => l.replace(/\s+/g, " ").includes(label));
+    if (i === -1) return null;
+    const v = tail[i + 1] ?? null;
+    return v ? v.replace(/\s+/g, " ").trim() : null;
+  }
+
+  const players = findValue("تعداد بازیکن");
+  const time = findValue("مدت زمان بازی");
+  const difficulty = findValue("پيچيدگي و سختي بازی");
+  const age = findValue("گروه سنی");
+  const category = findValue("دسته بندی");
+
+  function parseRange(v) {
+    if (!v) return null;
+    const m = v.match(/(\d+)\s*تا\s*(\d+)/);
+    if (m) return { min: Number(m[1]), max: Number(m[2]) };
+    const single = v.match(/(\d+)/);
+    if (single) return { min: Number(single[1]), max: Number(single[1]) };
+    return null;
+  }
+
+  function parseMinutes(v) {
+    if (!v) return null;
+    const m = v.match(/(\d+)\s*دقیقه/);
+    if (m) return Number(m[1]);
+    const n = v.match(/(\d+)/);
+    return n ? Number(n[1]) : null;
+  }
+
+  function parseAge(v) {
+    if (!v) return null;
+    const m = v.match(/(\d+)\s*سال/);
+    if (m) return Number(m[1]);
+    const n = v.match(/(\d+)/);
+    return n ? Number(n[1]) : null;
+  }
+
+  function mapDifficulty(v) {
+    if (!v) return null;
+    const s = v.replace(/\s+/g, " ").trim();
+    if (s.includes("سبک")) return 1.6;
+    if (s.includes("متوسط")) return 2.5;
+    if (s.includes("سنگین")) return 3.5;
+    return null;
+  }
+
+  return {
+    category,
+    players: parseRange(players),
+    playingTime: parseMinutes(time),
+    age: parseAge(age),
+    complexity: mapDifficulty(difficulty),
+  };
+}
+
+function extractSection(text, startLabel, endLabel) {
+  const t = String(text || "");
+  const startIdx = t.indexOf(startLabel);
+  if (startIdx === -1) return null;
+  const afterStart = t.slice(startIdx + startLabel.length);
+  const endIdx = afterStart.indexOf(endLabel);
+  const slice = endIdx === -1 ? afterStart : afterStart.slice(0, endIdx);
+  const cleaned = slice.trim().replace(/\n{3,}/g, "\n\n");
+  return cleaned || null;
+}
+
+function extractAllXmlLinkValues(xml, linkType) {
+  const out = [];
+  const re = new RegExp(
+    `<link[^>]+type=["']${linkType}["'][^>]+value=["']([^"']+)["'][^>]*/?>`,
+    "gi",
+  );
+  let m;
+  while ((m = re.exec(String(xml || "")))) {
+    out.push(decodeXmlEntities(m[1]).trim());
+  }
+  return out;
+}
+
+function extractXmlTagValue(xml, tagName) {
+  const re = new RegExp(`<${tagName}[^>]*>([\\s\\S]*?)<\\/${tagName}>`, "i");
+  const m = String(xml || "").match(re);
+  return m ? decodeXmlEntities(m[1]).trim() : null;
+}
+
+function extractXmlAttrValue(xml, tagName, attr) {
+  const re = new RegExp(
+    `<${tagName}[^>]+${attr}=["']([^"']+)["'][^>]*/?>`,
+    "i",
+  );
+  const m = String(xml || "").match(re);
+  return m ? decodeXmlEntities(m[1]).trim() : null;
+}
+
+function extractBggPrimaryName(xml) {
+  const re = /<name[^>]+type=["']primary["'][^>]+value=["']([^"']+)["'][^>]*/i;
+  const m = String(xml || "").match(re);
+  return m ? decodeXmlEntities(m[1]).trim() : null;
+}
+
+async function fetchBggThing(bggId) {
+  const url = new URL("https://boardgamegeek.com/xmlapi2/thing");
+  url.searchParams.set("id", String(bggId));
+  url.searchParams.set("stats", "1");
+
+  let lastErr;
+  let xml = null;
+  for (let attempt = 0; attempt <= 6; attempt++) {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 25000);
+
+    try {
+      const res = await fetch(url.toString(), {
+        signal: controller.signal,
+        headers: {
+          Accept: "application/xml,text/xml;q=0.9,*/*;q=0.8",
+          "User-Agent": "thinksygeek-seed/1.0 (+https://localhost)",
+          "Accept-Language": "en-US,en;q=0.9",
+        },
+      });
+      clearTimeout(timeoutId);
+
+      if (res.status === 202 || res.status === 429) {
+        lastErr = new Error(`HTTP ${res.status} ${res.statusText}`);
+      } else if (res.ok) {
+        xml = await res.text();
+        break;
+      } else {
+        const text = await res.text().catch(() => "");
+        lastErr = new Error(
+          `HTTP ${res.status} ${res.statusText}${text ? ` - ${text.slice(0, 300)}` : ""}`,
+        );
+      }
+    } catch (err) {
+      clearTimeout(timeoutId);
+      lastErr = err;
+    }
+
+    const wait = Math.min(15000, 800 * Math.pow(2, attempt));
+    await new Promise((r) => setTimeout(r, wait));
+  }
+
+  if (!xml) {
+    throw lastErr ?? new Error("Failed to fetch BGG XML");
+  }
+
+  const name = extractBggPrimaryName(xml) || `BGG-${bggId}`;
+  const yearPublishedRaw = extractXmlAttrValue(xml, "yearpublished", "value");
+  const minPlayersRaw = extractXmlAttrValue(xml, "minplayers", "value");
+  const maxPlayersRaw = extractXmlAttrValue(xml, "maxplayers", "value");
+  const playingTimeRaw = extractXmlAttrValue(xml, "playingtime", "value");
+  const minAgeRaw = extractXmlAttrValue(xml, "minage", "value");
+  const weightRaw = extractXmlAttrValue(xml, "averageweight", "value");
+  const descriptionEn = extractXmlTagValue(xml, "description");
+
+  const publishers = extractAllXmlLinkValues(xml, "boardgamepublisher");
+  const designers = extractAllXmlLinkValues(xml, "boardgamedesigner");
+  const categories = extractAllXmlLinkValues(xml, "boardgamecategory");
+  const mechanics = extractAllXmlLinkValues(xml, "boardgamemechanic");
+
+  const imageUrl = extractXmlTagValue(xml, "image");
+  const thumbnailUrl = extractXmlTagValue(xml, "thumbnail");
+
+  function toNumber(v) {
+    if (v === null || v === undefined) return null;
+    const n = Number(String(v).trim());
+    return Number.isFinite(n) ? n : null;
+  }
+
+  return {
+    bggId: String(bggId),
+    name,
+    yearPublished: toNumber(yearPublishedRaw),
+    minPlayers: toNumber(minPlayersRaw),
+    maxPlayers: toNumber(maxPlayersRaw),
+    playingTime: toNumber(playingTimeRaw),
+    age: toNumber(minAgeRaw),
+    complexity: toNumber(weightRaw),
+    descriptionEn,
+    publishers,
+    designers,
+    categories,
+    mechanics,
+    imageUrl,
+    thumbnailUrl,
+  };
+}
+
+function parseJsonEnv(name) {
+  const raw = process.env[name];
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+}
+
+function getBaziPlanetMap() {
+  const map = parseJsonEnv("BAZIPLANET_MAP");
+  if (!map || typeof map !== "object") return {};
+  return map;
+}
+
+function cleanupStrapiRichtext(text) {
+  const t = String(text || "").trim();
+  if (!t) return null;
+  return t.replace(/\n{3,}/g, "\n\n").trim();
+}
+
+async function importBaziPlanetGame(pageUrl) {
+  const res = await fetchWithRetry(
+    pageUrl,
+    {},
+    { retries: 2, backoffMs: 800, timeoutMs: 20000 },
+  );
+  const html = await res.text();
+  const title =
+    extractMeta(html, "og:title") ||
+    extractFirstTagText(html, "h1") ||
+    extractFirstTagText(html, "title") ||
+    "Board Game";
+  const descriptionText = htmlToText(html);
+  const description =
+    extractSection(descriptionText, "توضیحات", "جزئیات محصول") ||
+    descriptionText;
+
+  const specs = parseBaziPlanetSpecs(descriptionText);
+
+  const urlObj = new URL(pageUrl);
+  const last = urlObj.pathname.split("/").filter(Boolean).pop() || "";
+  const slugGuess =
+    slugifyAscii(last.split("-").slice(-3).join("-")) ||
+    `baziplanet-${Date.now()}`;
+
+  const categorySlug = specs.category ? slugifyAscii(specs.category) : null;
+  const categoryIds = [];
+  if (specs.category && categorySlug) {
+    const id = await ensureBySlug("categories", {
+      slug: categorySlug,
+      name: specs.category,
+    });
+    categoryIds.push(id);
+  }
+
+  const imageIds = [];
+  for (const [idx, imageUrl] of images.entries()) {
+    const id = await uploadImageFromUrl(
+      imageUrl,
+      `${slugGuess}-${idx + 1}.jpg`,
+    ).catch(() => null);
+    if (id) imageIds.push(id);
+  }
+
+  const data = {
+    slug: slugGuess,
+    title,
+    description,
+    minPlayers: specs.players?.min ?? undefined,
+    maxPlayers: specs.players?.max ?? undefined,
+    playingTime: specs.playingTime ?? undefined,
+    age: specs.age ?? undefined,
+    complexity: specs.complexity ?? undefined,
+    categories: categoryIds.length ? categoryIds : undefined,
+    images: imageIds.length ? imageIds : undefined,
+  };
+
+  await ensureBySlug("games", data);
+  return { slug: slugGuess };
+}
+
+function normalizeBggPublisherName(name) {
+  return String(name || "").trim();
+}
+
+function getKnownPublisherNameFa(nameEn) {
+  const n = normalizeBggPublisherName(nameEn).toLowerCase();
+  const map = {
+    kosmos: "کاسموس (KOSMOS)",
+    "z-man games": "زد-من گیمز (Z-Man Games)",
+    "next move games": "نکست موو گیمز (Next Move Games)",
+    fryxgames: "فریکس‌گیمز (FryxGames)",
+  };
+  return map[n] ?? null;
+}
+
+async function importBggGame({ bggId, preferredPublisherSlug } = {}) {
+  if (!bggId) throw new Error("Missing bggId");
+  const bgg = await fetchBggThing(bggId);
+
+  const baziPlanetMap = getBaziPlanetMap();
+  const baziPlanetUrl =
+    (typeof baziPlanetMap[bgg.bggId] === "string"
+      ? baziPlanetMap[bgg.bggId]
+      : null) ?? null;
+
+  let imagesFromBazi = [];
+  let descriptionFa = null;
+  let specsFa = {};
+  if (baziPlanetUrl) {
+    const res = await fetchWithRetry(
+      baziPlanetUrl,
+      {},
+      { retries: 2, backoffMs: 800, timeoutMs: 20000 },
+    );
+    const html = await res.text();
+    const text = htmlToText(html);
+    descriptionFa = cleanupStrapiRichtext(
+      extractSection(text, "توضیحات", "جزئیات محصول"),
+    );
+    specsFa = parseBaziPlanetSpecs(text);
+    imagesFromBazi = extractImageUrls(html, baziPlanetUrl).slice(0, 6);
+  }
+
+  const primaryName = bgg.name;
+  const slugBase = slugifyAscii(primaryName) || `bgg-${bgg.bggId}`;
+  const gameSlug = `${slugBase}-${bgg.bggId}`;
+
+  const publisherNameEn = bgg.publishers?.[0] ?? null;
+  const publisherSlug =
+    preferredPublisherSlug ??
+    (publisherNameEn ? slugifyAscii(publisherNameEn) : null) ??
+    "publisher";
+  const publisherNameFa =
+    (publisherNameEn ? getKnownPublisherNameFa(publisherNameEn) : null) ??
+    publisherNameEn ??
+    publisherSlug;
+  const publisherId = await ensureBySlug("publishers", {
+    slug: publisherSlug,
+    name: publisherNameFa,
+  });
+
+  const firstDesignerEn = bgg.designers?.[0] ?? null;
+  const designerSlug = firstDesignerEn ? slugifyAscii(firstDesignerEn) : null;
+  const designerId =
+    firstDesignerEn && designerSlug
+      ? await ensureBySlug("designers", {
+          slug: designerSlug,
+          name: firstDesignerEn,
+        })
+      : null;
+
+  const categoryIds = [];
+  for (const c of (bgg.categories || []).slice(0, 6)) {
+    const cSlug = slugifyAscii(c);
+    if (!cSlug) continue;
+    const id = await ensureBySlug("categories", { slug: cSlug, name: c });
+    categoryIds.push(id);
+  }
+
+  const mechanicIds = [];
+  for (const m of (bgg.mechanics || []).slice(0, 8)) {
+    const mSlug = slugifyAscii(m);
+    if (!mSlug) continue;
+    const id = await ensureBySlug("mechanics", { slug: mSlug, name: m });
+    mechanicIds.push(id);
+  }
+
+  const imageUrls = imagesFromBazi.length ? imagesFromBazi : [];
+  const imageIds = [];
+  for (const [idx, imageUrl] of imageUrls.entries()) {
+    const id = await uploadImageFromUrl(
+      imageUrl,
+      `${gameSlug}-${idx + 1}.jpg`,
+    ).catch(() => null);
+    if (id) imageIds.push(id);
+  }
+
+  const minPlayers = specsFa.players?.min ?? bgg.minPlayers ?? undefined;
+  const maxPlayers = specsFa.players?.max ?? bgg.maxPlayers ?? undefined;
+  const playingTime = specsFa.playingTime ?? bgg.playingTime ?? undefined;
+  const age = specsFa.age ?? bgg.age ?? undefined;
+  const complexity = specsFa.complexity ?? bgg.complexity ?? undefined;
+
+  const description =
+    descriptionFa ?? cleanupStrapiRichtext(bgg.descriptionEn) ?? primaryName;
+
+  const data = {
+    slug: gameSlug,
+    title: primaryName,
+    description,
+    minPlayers,
+    maxPlayers,
+    playingTime,
+    age,
+    complexity,
+    publisher: publisherId,
+    designer: designerId ?? undefined,
+    categories: categoryIds.length ? categoryIds : undefined,
+    mechanics: mechanicIds.length ? mechanicIds : undefined,
+    images: imageIds.length ? imageIds : undefined,
+  };
+
+  await ensureBySlug("games", data);
+  return { slug: gameSlug };
+}
+
+function getDefaultBggSeedPlan() {
+  return [
+    {
+      publisher: { slug: "kosmos", name: "کاسموس (KOSMOS)" },
+      bggIds: [13, 50, 118048],
+    },
+    {
+      publisher: { slug: "z-man-games", name: "زد-من گیمز (Z-Man Games)" },
+      bggIds: [30549, 129622, 822],
+    },
+    {
+      publisher: {
+        slug: "next-move-games",
+        name: "نکست موو گیمز (Next Move Games)",
+      },
+      bggIds: [230802, 290100, 306040],
+    },
+    {
+      publisher: { slug: "fryxgames", name: "فریکس‌گیمز (FryxGames)" },
+      bggIds: [167791, 359609],
+    },
+  ];
+}
+
 async function main() {
   console.log("Seeding started…");
 
@@ -186,6 +730,46 @@ async function main() {
   const mechanicIdBySlug = {};
   for (const m of mechanics) {
     mechanicIdBySlug[m.slug] = await ensureBySlug("mechanics", m);
+  }
+
+  const bggSeedPlan = parseJsonEnv("BGG_SEED_PLAN");
+  const plan = Array.isArray(bggSeedPlan)
+    ? bggSeedPlan
+    : getDefaultBggSeedPlan();
+  if (process.env.BGG_SEED === "1") {
+    const baziPlanetMap = getBaziPlanetMap();
+    if (Object.keys(baziPlanetMap).length === 0) {
+      console.log(
+        'BAZIPLANET_MAP is empty. Images will be skipped unless you provide a mapping { "<bggId>": "<baziPlanetUrl>" }',
+      );
+    }
+
+    for (const group of plan) {
+      const publisher = group?.publisher;
+      const publisherSlug = publisher?.slug;
+      const publisherName = publisher?.name;
+      const bggIds = Array.isArray(group?.bggIds) ? group.bggIds : [];
+      if (publisherSlug && publisherName) {
+        await ensureBySlug("publishers", {
+          slug: publisherSlug,
+          name: publisherName,
+        });
+      }
+      for (const id of bggIds) {
+        await importBggGame({
+          bggId: id,
+          preferredPublisherSlug: publisherSlug || undefined,
+        });
+      }
+    }
+  }
+
+  const baziPlanetUrls = (process.env.BAZIPLANET_URLS || "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+  for (const url of baziPlanetUrls) {
+    await importBaziPlanetGame(url);
   }
 
   const games = [

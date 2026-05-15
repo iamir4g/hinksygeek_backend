@@ -1,3 +1,20 @@
-import { factories } from '@strapi/strapi';
-
-export default factories.createCoreRouter('api::wishlist.wishlist');
+export default {
+  routes: [
+    {
+      method: "GET",
+      path: "/wishlist/me",
+      handler: "wishlist.me",
+      config: {
+        auth: {},
+      },
+    },
+    {
+      method: "POST",
+      path: "/wishlist/toggle",
+      handler: "wishlist.toggle",
+      config: {
+        auth: {},
+      },
+    },
+  ],
+};

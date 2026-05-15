@@ -489,8 +489,17 @@ export interface ApiCommentComment extends Struct.CollectionTypeSchema {
     createdAt: Schema.Attribute.DateTime;
     createdBy: Schema.Attribute.Relation<'oneToOne', 'admin::user'> &
       Schema.Attribute.Private;
+    dislikedBy: Schema.Attribute.Relation<
+      'manyToMany',
+      'plugin::users-permissions.user'
+    >;
     game: Schema.Attribute.Relation<'manyToOne', 'api::game.game'>;
     isApproved: Schema.Attribute.Boolean & Schema.Attribute.DefaultTo<false>;
+    isRejected: Schema.Attribute.Boolean & Schema.Attribute.DefaultTo<false>;
+    likedBy: Schema.Attribute.Relation<
+      'manyToMany',
+      'plugin::users-permissions.user'
+    >;
     locale: Schema.Attribute.String & Schema.Attribute.Private;
     localizations: Schema.Attribute.Relation<
       'oneToMany',
