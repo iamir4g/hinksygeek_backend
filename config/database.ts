@@ -1,5 +1,14 @@
+import fs from 'fs';
 import path from 'path';
 import type { Core } from '@strapi/strapi';
+import dotenv from 'dotenv';
+
+const rootDir = path.join(__dirname, '..', '..');
+const envPath = path.join(rootDir, '.env');
+const envExamplePath = path.join(rootDir, '.env.example');
+if (!process.env.DATABASE_CLIENT && !fs.existsSync(envPath) && fs.existsSync(envExamplePath)) {
+  dotenv.config({ path: envExamplePath });
+}
 
 const config = ({ env }: Core.Config.Shared.ConfigParams): Core.Config.Database => {
   const client = env('DATABASE_CLIENT', 'sqlite');
