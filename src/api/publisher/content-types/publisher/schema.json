@@ -12,6 +12,9 @@
       "type": "string",
       "required": true
     },
+    "nameEnglish": {
+      "type": "string"
+    },
     "slug": {
       "type": "uid",
       "targetField": "name",
@@ -24,6 +27,15 @@
     },
     "bio": {
       "type": "richtext"
+    },
+    "foundedYear": {
+      "type": "integer"
+    },
+    "country": {
+      "type": "string"
+    },
+    "website": {
+      "type": "string"
     },
     "games": {
       "type": "relation",

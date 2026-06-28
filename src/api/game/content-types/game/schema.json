@@ -12,6 +12,9 @@
       "type": "string",
       "required": true
     },
+    "titleEnglish": {
+      "type": "string"
+    },
     "slug": {
       "type": "uid",
       "targetField": "title",
@@ -19,6 +22,42 @@
     },
     "description": {
       "type": "richtext"
+    },
+    "story": {
+      "type": "text"
+    },
+    "videoUrl": {
+      "type": "string"
+    },
+    "bestPlayerCount": {
+      "type": "string"
+    },
+    "languageDependency": {
+      "type": "string"
+    },
+    "releaseYear": {
+      "type": "integer"
+    },
+    "averageRating": {
+      "type": "decimal"
+    },
+    "ratingsCount": {
+      "type": "integer"
+    },
+    "ratingGameplay": {
+      "type": "decimal"
+    },
+    "ratingArt": {
+      "type": "decimal"
+    },
+    "ratingRules": {
+      "type": "decimal"
+    },
+    "ratingStrategy": {
+      "type": "decimal"
+    },
+    "ratingReplay": {
+      "type": "decimal"
     },
     "images": {
       "type": "media",

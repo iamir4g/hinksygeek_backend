@@ -440,6 +440,44 @@ export interface AdminUser extends Struct.CollectionTypeSchema {
   };
 }
 
+export interface ApiArticleArticle extends Struct.CollectionTypeSchema {
+  collectionName: 'articles';
+  info: {
+    displayName: 'Article';
+    pluralName: 'articles';
+    singularName: 'article';
+  };
+  options: {
+    draftAndPublish: false;
+  };
+  attributes: {
+    author: Schema.Attribute.String;
+    brief: Schema.Attribute.Text;
+    category: Schema.Attribute.String;
+    content: Schema.Attribute.RichText;
+    coverImage: Schema.Attribute.Media<'images'>;
+    createdAt: Schema.Attribute.DateTime;
+    createdBy: Schema.Attribute.Relation<'oneToOne', 'admin::user'> &
+      Schema.Attribute.Private;
+    likes: Schema.Attribute.Integer & Schema.Attribute.DefaultTo<0>;
+    locale: Schema.Attribute.String & Schema.Attribute.Private;
+    localizations: Schema.Attribute.Relation<
+      'oneToMany',
+      'api::article.article'
+    > &
+      Schema.Attribute.Private;
+    publishedAt: Schema.Attribute.DateTime;
+    publishedDate: Schema.Attribute.String;
+    readTime: Schema.Attribute.String;
+    slug: Schema.Attribute.UID<'title'> & Schema.Attribute.Required;
+    tags: Schema.Attribute.JSON;
+    title: Schema.Attribute.String & Schema.Attribute.Required;
+    updatedAt: Schema.Attribute.DateTime;
+    updatedBy: Schema.Attribute.Relation<'oneToOne', 'admin::user'> &
+      Schema.Attribute.Private;
+  };
+}
+
 export interface ApiCategoryCategory extends Struct.CollectionTypeSchema {
   collectionName: 'categories';
   info: {
@@ -557,6 +595,8 @@ export interface ApiGameGame extends Struct.CollectionTypeSchema {
   };
   attributes: {
     age: Schema.Attribute.Integer;
+    averageRating: Schema.Attribute.Decimal;
+    bestPlayerCount: Schema.Attribute.String;
     categories: Schema.Attribute.Relation<
       'manyToMany',
       'api::category.category'
@@ -569,6 +609,7 @@ export interface ApiGameGame extends Struct.CollectionTypeSchema {
     description: Schema.Attribute.RichText;
     designer: Schema.Attribute.Relation<'manyToOne', 'api::designer.designer'>;
     images: Schema.Attribute.Media<'images', true>;
+    languageDependency: Schema.Attribute.String;
     locale: Schema.Attribute.String & Schema.Attribute.Private;
     localizations: Schema.Attribute.Relation<'oneToMany', 'api::game.game'> &
       Schema.Attribute.Private;
@@ -584,11 +625,21 @@ export interface ApiGameGame extends Struct.CollectionTypeSchema {
       'manyToOne',
       'api::publisher.publisher'
     >;
+    ratingArt: Schema.Attribute.Decimal;
+    ratingGameplay: Schema.Attribute.Decimal;
+    ratingReplay: Schema.Attribute.Decimal;
+    ratingRules: Schema.Attribute.Decimal;
+    ratingsCount: Schema.Attribute.Integer;
+    ratingStrategy: Schema.Attribute.Decimal;
+    releaseYear: Schema.Attribute.Integer;
     slug: Schema.Attribute.UID<'title'> & Schema.Attribute.Required;
+    story: Schema.Attribute.Text;
     title: Schema.Attribute.String & Schema.Attribute.Required;
+    titleEnglish: Schema.Attribute.String;
     updatedAt: Schema.Attribute.DateTime;
     updatedBy: Schema.Attribute.Relation<'oneToOne', 'admin::user'> &
       Schema.Attribute.Private;
+    videoUrl: Schema.Attribute.String;
     wishlists: Schema.Attribute.Relation<
       'manyToMany',
       'api::wishlist.wishlist'
@@ -638,9 +689,11 @@ export interface ApiPublisherPublisher extends Struct.CollectionTypeSchema {
   };
   attributes: {
     bio: Schema.Attribute.RichText;
+    country: Schema.Attribute.String;
     createdAt: Schema.Attribute.DateTime;
     createdBy: Schema.Attribute.Relation<'oneToOne', 'admin::user'> &
       Schema.Attribute.Private;
+    foundedYear: Schema.Attribute.Integer;
     games: Schema.Attribute.Relation<'oneToMany', 'api::game.game'>;
     locale: Schema.Attribute.String & Schema.Attribute.Private;
     localizations: Schema.Attribute.Relation<
@@ -650,11 +703,13 @@ export interface ApiPublisherPublisher extends Struct.CollectionTypeSchema {
       Schema.Attribute.Private;
     logo: Schema.Attribute.Media<'images'>;
     name: Schema.Attribute.String & Schema.Attribute.Required;
+    nameEnglish: Schema.Attribute.String;
     publishedAt: Schema.Attribute.DateTime;
     slug: Schema.Attribute.UID<'name'> & Schema.Attribute.Required;
     updatedAt: Schema.Attribute.DateTime;
     updatedBy: Schema.Attribute.Relation<'oneToOne', 'admin::user'> &
       Schema.Attribute.Private;
+    website: Schema.Attribute.String;
   };
 }
 
@@ -1201,6 +1256,7 @@ declare module '@strapi/strapi' {
       'admin::transfer-token': AdminTransferToken;
       'admin::transfer-token-permission': AdminTransferTokenPermission;
       'admin::user': AdminUser;
+      'api::article.article': ApiArticleArticle;
       'api::category.category': ApiCategoryCategory;
       'api::comment.comment': ApiCommentComment;
       'api::designer.designer': ApiDesignerDesigner;

@@ -1,4 +1,31 @@
+const fs = require("fs");
+const path = require("path");
+const crypto = require("crypto");
+
 const DEFAULT_STRAPI_URL = "http://localhost:1337";
+
+function loadEnvFile(filePath) {
+  if (!fs.existsSync(filePath)) return;
+  const content = fs.readFileSync(filePath, "utf8");
+  for (const line of content.split("\n")) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith("#")) continue;
+    const eq = trimmed.indexOf("=");
+    if (eq === -1) continue;
+    const key = trimmed.slice(0, eq).trim();
+    let val = trimmed.slice(eq + 1).trim();
+    if (
+      (val.startsWith('"') && val.endsWith('"')) ||
+      (val.startsWith("'") && val.endsWith("'"))
+    ) {
+      val = val.slice(1, -1);
+    }
+    if (process.env[key] === undefined) process.env[key] = val;
+  }
+}
+
+loadEnvFile(path.join(__dirname, ".env"));
+loadEnvFile(path.join(__dirname, "..", ".env"));
 
 function requireEnv(name) {
   const v = process.env[name]?.trim();
@@ -52,6 +79,13 @@ async function requestJson(path, init = {}) {
 
   if (!res.ok) {
     const text = await res.text().catch(() => "");
+    if (res.status === 401) {
+      throw new Error(
+        `Authentication failed (401). Use an API Token from Strapi Admin → Settings → API Tokens (not Transfer Tokens). ` +
+          `Set STRAPI_TOKEN in backend/.env and ensure STRAPI_URL points to your running Strapi instance. ` +
+          `${init.method || "GET"} ${path}${text ? ` - ${text}` : ""}`,
+      );
+    }
     throw new Error(
       `${init.method || "GET"} ${path} failed: ${res.status} ${res.statusText}${text ? ` - ${text}` : ""}`,
     );
@@ -146,6 +180,18 @@ function slugifyAscii(input) {
     .replace(/-+/g, "-")
     .replace(/^-|-$/g, "");
   return s || null;
+}
+
+/** Strapi slugs must be ASCII: /^[A-Za-z0-9-_.~]*$/ */
+function asciiSlugFromLabel(label, prefix = "item") {
+  const ascii = slugifyAscii(label);
+  if (ascii) return ascii.slice(0, 80);
+  const hash = crypto
+    .createHash("sha1")
+    .update(String(label))
+    .digest("hex")
+    .slice(0, 12);
+  return `${prefix}-${hash}`;
 }
 
 function normalizeDigits(input) {
@@ -683,6 +729,191 @@ function getDefaultBggSeedPlan() {
   ];
 }
 
+function parsePlayersFa(value) {
+  const n = normalizeDigits(String(value || ""));
+  const range = n.match(/(\d+)\s*تا\s*(\d+)/);
+  if (range) return { min: Number(range[1]), max: Number(range[2]) };
+  const single = n.match(/(\d+)/);
+  if (single) return { min: Number(single[1]), max: Number(single[1]) };
+  return {};
+}
+
+function parsePlayTimeFa(value) {
+  const n = normalizeDigits(String(value || ""));
+  const nums = n.match(/(\d+)/g);
+  if (!nums?.length) return null;
+  return Math.max(...nums.map(Number));
+}
+
+function parseAgeFa(value) {
+  const n = normalizeDigits(String(value || ""));
+  const m = n.match(/(\d+)/);
+  return m ? Number(m[1]) : null;
+}
+
+function avgRatingFromSum(ratingsSum, ratingsCount) {
+  if (!ratingsSum || !ratingsCount) return null;
+  const total = Object.values(ratingsSum).reduce((a, b) => a + b, 0);
+  return total / (5 * ratingsCount);
+}
+
+async function seedBazigeekCatalog() {
+  if (process.env.BAZIGEEK_SEED === "0") return;
+
+  let data;
+  try {
+    data = require("./bazigeek-seed-data.js");
+  } catch {
+    console.log("bazigeek-seed-data.js not found; skipping BaziGeek seed.");
+    return;
+  }
+
+  const { publishers = [], games = [], articles = [] } = data;
+  console.log(`BaziGeek seed: ${publishers.length} publishers, ${games.length} games, ${articles.length} articles`);
+
+  const publisherIdBySlug = {};
+  for (const pub of publishers) {
+    const slug = pub.id;
+    let logoId = null;
+    if (pub.logoUrl) {
+      logoId = await uploadImageFromUrl(pub.logoUrl, `${slug}-logo.jpg`).catch(
+        () => null,
+      );
+    }
+    const id = await ensureBySlug("publishers", {
+      slug,
+      name: pub.name,
+      nameEnglish: pub.nameEnglish,
+      bio: pub.description,
+      foundedYear: pub.foundedYear,
+      country: pub.country,
+      website: pub.website,
+      ...(logoId ? { logo: logoId } : {}),
+    });
+    publisherIdBySlug[slug] = id;
+  }
+
+  const categoryIdByName = {};
+  async function ensureCategory(name) {
+    if (categoryIdByName[name]) return categoryIdByName[name];
+    const slug = asciiSlugFromLabel(name, "cat");
+    const id = await ensureBySlug("categories", { slug, name });
+    categoryIdByName[name] = id;
+    return id;
+  }
+
+  const designerIdByName = {};
+  async function ensureDesigner(name) {
+    if (!name) return null;
+    if (designerIdByName[name]) return designerIdByName[name];
+    const slug = asciiSlugFromLabel(name, "designer");
+    const id = await ensureBySlug("designers", { slug, name });
+    designerIdByName[name] = id;
+    return id;
+  }
+
+  for (const g of games) {
+    const slug = g.id;
+    const existing = await findBySlug("games", slug);
+    if (existing) {
+      console.log(`Skip BaziGeek game (exists): ${slug}`);
+      continue;
+    }
+
+    const players = parsePlayersFa(g.numberOfPlayers);
+    const playingTime = parsePlayTimeFa(g.playTime);
+    const age = parseAgeFa(g.ageRange);
+    const ratingsCount = g.ratingsCount ?? 0;
+    const averageRating =
+      g.averageRating ?? avgRatingFromSum(g.ratingsSum, ratingsCount);
+
+    const categoryIds = [];
+    for (const cat of g.categories || []) {
+      categoryIds.push(await ensureCategory(cat));
+    }
+
+    const designerId = await ensureDesigner(g.designer);
+    const publisherId = publisherIdBySlug[g.publisherId] ?? null;
+
+    let imageId = null;
+    if (g.bgImageUrl) {
+      imageId = await uploadImageFromUrl(
+        g.bgImageUrl,
+        `${slug}-cover.jpg`,
+      ).catch(() => null);
+    }
+
+    const ratingFields =
+      ratingsCount > 0 && g.ratingsSum
+        ? {
+            ratingGameplay: g.ratingsSum.gameplay / ratingsCount,
+            ratingArt: g.ratingsSum.artAndComponents / ratingsCount,
+            ratingRules: g.ratingsSum.rulesEase / ratingsCount,
+            ratingStrategy: g.ratingsSum.strategyDepth / ratingsCount,
+            ratingReplay: g.ratingsSum.replayability / ratingsCount,
+          }
+        : {};
+
+    await createEntry("games", {
+      slug,
+      title: g.title,
+      titleEnglish: g.titleEnglish,
+      description: g.description,
+      story: g.story,
+      videoUrl: g.videoUrl,
+      minPlayers: players.min,
+      maxPlayers: players.max,
+      bestPlayerCount: g.bestPlayerCount,
+      playingTime,
+      age,
+      languageDependency: g.languageDependency,
+      releaseYear: g.releaseYear,
+      complexity: g.difficulty,
+      averageRating,
+      ratingsCount,
+      ...ratingFields,
+      publisher: publisherId ?? undefined,
+      designer: designerId ?? undefined,
+      categories: categoryIds.length ? categoryIds : undefined,
+      images: imageId ? [imageId] : undefined,
+    });
+
+    console.log(`Created BaziGeek game: ${slug}`);
+  }
+
+  for (const art of articles) {
+    const slug = art.slug || art.id;
+    const existing = await findBySlug("articles", slug);
+    if (existing) {
+      console.log(`Skip BaziGeek article (exists): ${slug}`);
+      continue;
+    }
+
+    let coverId = null;
+    if (art.imageUrl) {
+      coverId = await uploadImageFromUrl(art.imageUrl, `${slug}-cover.jpg`).catch(
+        () => null,
+      );
+    }
+
+    await createEntry("articles", {
+      slug,
+      title: art.title,
+      brief: art.brief,
+      content: art.content,
+      author: art.author,
+      publishedDate: art.date,
+      readTime: art.readTime,
+      category: art.category,
+      likes: art.likes ?? 0,
+      tags: art.tags ?? [],
+      ...(coverId ? { coverImage: coverId } : {}),
+    });
+
+    console.log(`Created BaziGeek article: ${slug}`);
+  }
+}
+
 async function main() {
   console.log("Seeding started…");
 
@@ -882,6 +1113,8 @@ async function main() {
 
     console.log(`Created game: ${g.slug} (id=${gameId})`);
   }
+
+  await seedBazigeekCatalog();
 
   console.log("Seeding finished ✅");
 }

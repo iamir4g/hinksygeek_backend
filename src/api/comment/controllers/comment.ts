@@ -55,16 +55,12 @@ export default factories.createCoreController("api::comment.comment", () => ({
         ? comments.map((c: any) => {
             const likedByIds = Array.isArray(c?.likedBy)
               ? (c.likedBy as unknown[])
-                  .map((u) =>
-                    u && typeof u === "object" ? (u as any).id : null,
-                  )
+                  .map((u) => (u && typeof u === "object" ? (u as any).id : null))
                   .filter((id): id is number => typeof id === "number")
               : [];
             const dislikedByIds = Array.isArray(c?.dislikedBy)
               ? (c.dislikedBy as unknown[])
-                  .map((u) =>
-                    u && typeof u === "object" ? (u as any).id : null,
-                  )
+                  .map((u) => (u && typeof u === "object" ? (u as any).id : null))
                   .filter((id): id is number => typeof id === "number")
               : [];
 
@@ -116,9 +112,7 @@ export default factories.createCoreController("api::comment.comment", () => ({
           : NaN;
 
     const reaction =
-      reactionRaw === "like" ||
-      reactionRaw === "dislike" ||
-      reactionRaw === "none"
+      reactionRaw === "like" || reactionRaw === "dislike" || reactionRaw === "none"
         ? reactionRaw
         : null;
 
